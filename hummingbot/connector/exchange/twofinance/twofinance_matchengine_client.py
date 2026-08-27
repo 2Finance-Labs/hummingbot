@@ -34,6 +34,7 @@ class MatchEngineClient:
     last_sequence: int = 0
     _ws_assistant: Any | None = None
     _pending_command_ids: list[str] = field(default_factory=list)
+    _awaiting_exchange_order_ids: list[str] = field(default_factory=list)
 
     async def send_command(self, command: OrderCommand) -> None:
         self.orders.setdefault(command.client_order_id, MatchEngineOrderEntry(command.client_order_id, command))
@@ -98,6 +99,13 @@ class MatchEngineClient:
         if entry is None:
             return
         entry.last_response = response
+        if (
+            response.accepted
+            and response.order_id is None
+            and entry.command.operation == "ADD"
+            and client_order_id not in self._awaiting_exchange_order_ids
+        ):
+            self._awaiting_exchange_order_ids.append(client_order_id)
         if response.order_id is not None:
             entry.exchange_order_id = response.order_id
             if entry.command.operation != "DELETE" or response.order_id not in self.orders_by_exchange_id:
@@ -110,6 +118,14 @@ class MatchEngineClient:
         exchange_order_id = event.payload.get("order_id") or event.payload.get("new_order_id")
         if client_order_id is None and exchange_order_id is not None:
             client_order_id = self.orders_by_exchange_id.get(str(exchange_order_id))
+        if client_order_id is None and exchange_order_id is not None and event.event_type == "ORDER_ACCEPTED":
+            candidates = self._awaiting_exchange_order_ids or [
+                candidate
+                for candidate in self._pending_command_ids
+                if self.orders.get(candidate) is not None and self.orders[candidate].command.operation == "ADD"
+            ]
+            if candidates:
+                client_order_id = candidates[0]
         if client_order_id is None:
             return
         entry = self.orders.get(str(client_order_id))
@@ -119,6 +135,8 @@ class MatchEngineClient:
         if exchange_order_id is not None:
             entry.exchange_order_id = str(exchange_order_id)
             self.orders_by_exchange_id[str(exchange_order_id)] = str(client_order_id)
+            if client_order_id in self._awaiting_exchange_order_ids:
+                self._awaiting_exchange_order_ids.remove(client_order_id)
 
     async def close(self) -> None:
         if self._ws_assistant is not None:

@@ -1,7 +1,11 @@
 import unittest
 
 from hummingbot.connector.exchange.twofinance.twofinance_matchengine_client import MatchEngineClient
-from hummingbot.connector.exchange.twofinance.twofinance_matchengine_schemas import CommandStatus, OrderCommand
+from hummingbot.connector.exchange.twofinance.twofinance_matchengine_schemas import (
+    CommandStatus,
+    MatchEngineEvent,
+    OrderCommand,
+)
 from hummingbot.core.web_assistant.connections.data_types import WSResponse
 
 
@@ -67,7 +71,7 @@ class TwoFinanceMatchEngineClientTests(unittest.IsolatedAsyncioTestCase):
             self.api_factory.ws.connect_calls[0]["ws_headers"],
             {"Authorization": "Bearer test-token"},
         )
-        self.assertEqual(self.api_factory.ws.sent_payloads[0]["schema"], "matchengine.order_command.v1")
+        self.assertEqual(self.api_factory.ws.sent_payloads[0]["schema"], "matchengine.order_command.v2")
         self.assertEqual(self.api_factory.ws.sent_payloads[0]["client_order_id"], "HBOT-2F-1")
         self.assertEqual(self.api_factory.ws.sent_payloads[0]["idempotency_key"], "HBOT-2F-1")
 
@@ -134,6 +138,28 @@ class TwoFinanceMatchEngineClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(exchange_order_id, "124")
         self.assertEqual(self.client.orders_by_exchange_id["124"], "HBOT-2F-3")
+
+    async def test_legacy_wallet_event_correlates_fifo_pending_add_to_exchange_order_id(self):
+        command = OrderCommand(
+            client_order_id="HBOT-2F-LEGACY",
+            engine_id="engine-btc-usdt",
+            symbol_id=1,
+            market="BTC-USDT",
+            wallet_id=7,
+            side="BUY",
+            order_type="LIMIT",
+            quantity="1",
+            price="100",
+        )
+        await self.client.send_command(command)
+        self.client.apply_event(
+            MatchEngineEvent.from_payload(
+                {"type": 0, "operation": 3, "event_id": 73, "order_id": 125, "order_status": 1, "wallet_id": 7}
+            )
+        )
+
+        self.assertEqual(self.client.orders["HBOT-2F-LEGACY"].exchange_order_id, "125")
+        self.assertEqual(self.client.orders_by_exchange_id["125"], "HBOT-2F-LEGACY")
 
     async def test_cancel_ack_does_not_steal_exchange_order_mapping(self):
         create_command = OrderCommand(

@@ -28,7 +28,7 @@ class TwoFinanceMatchEngineSchemasTests(unittest.TestCase):
 
         payload = command.to_payload()
 
-        self.assertEqual(payload["schema"], "matchengine.order_command.v1")
+        self.assertEqual(payload["schema"], "matchengine.order_command.v2")
         self.assertEqual(payload["operation"], "ADD")
         self.assertEqual(payload["client_order_id"], "HBOT-2F-1")
         self.assertEqual(payload["idempotency_key"], "HBOT-2F-1")
@@ -64,6 +64,26 @@ class TwoFinanceMatchEngineSchemasTests(unittest.TestCase):
         self.assertEqual(real_reject.status, CommandStatus.REJECTED_BY_PARSER)
         self.assertEqual(real_reject.reason, "INVALID_MESSAGE_ORDER_LIMIT")
 
+    def test_delete_command_serializes_numeric_order_id_for_matchengine_v2(self):
+        command = OrderCommand(
+            client_order_id="HBOT-2F-1-C",
+            engine_id="engine-btc-usdt",
+            symbol_id=1,
+            market="BTC-USDT",
+            wallet_id=7,
+            side="BUY",
+            order_type="LIMIT",
+            quantity="0",
+            operation="DELETE",
+            order_id="42",
+        )
+
+        payload = command.to_payload()
+
+        self.assertEqual(payload["schema"], "matchengine.order_command.v2")
+        self.assertEqual(payload["operation"], "DELETE")
+        self.assertEqual(payload["order_id"], 42)
+
     def test_event_order_state_uses_engine_status(self):
         event = MatchEngineEvent.from_payload(
             {
@@ -78,6 +98,23 @@ class TwoFinanceMatchEngineSchemasTests(unittest.TestCase):
         )
 
         self.assertEqual(event_order_state(event), OrderState.FILLED)
+
+    def test_legacy_wallet_order_event_is_normalized_to_v2_lifecycle(self):
+        event = MatchEngineEvent.from_payload(
+            {
+                "type": 0,
+                "operation": 3,
+                "event_id": 73,
+                "order_id": 5,
+                "order_status": 1,
+                "wallet_id": 1,
+            }
+        )
+
+        self.assertEqual(event.schema, "matchengine.event.v2")
+        self.assertEqual(event.event_type, "ORDER_ACCEPTED")
+        self.assertEqual(event.sequence, 73)
+        self.assertEqual(event.payload["order_id"], 5)
 
 
 if __name__ == "__main__":

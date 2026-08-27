@@ -61,6 +61,8 @@ def main():
         "numba>=0.61.2",
         "numpy>=2.2.6",
         "objgraph",
+        "opentelemetry-exporter-otlp-proto-http>=1.38,<2",
+        "opentelemetry-sdk>=1.38,<2",
         "pandas>=2.3.2",
         "pandas-ta>=0.4.71b",
         "prompt_toolkit>=3.0.39",

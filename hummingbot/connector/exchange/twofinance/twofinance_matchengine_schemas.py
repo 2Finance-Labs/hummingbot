@@ -116,15 +116,16 @@ class MatchEngineEvent:
                     "timestamp_ns",
                 }
             }
+        raw_event_id = data.get("event_id") or data.get("sequence") or ""
         return cls(
             schema=str(data.get("schema", CONSTANTS.MATCHENGINE_EVENT_SCHEMA)),
             engine_id=optional_str(data.get("engine_id")),
-            sequence=int(data.get("sequence", 0)),
-            event_id=str(data.get("event_id") or data.get("sequence") or ""),
-            event_type=str(data.get("event_type") or data.get("type") or ""),
+            sequence=event_sequence(data, raw_event_id),
+            event_id=str(raw_event_id),
+            event_type=event_type_name(data),
             symbol_id=optional_int(data.get("symbol_id")),
             market=optional_str(data.get("market")),
-            timestamp_ns=optional_int(data.get("timestamp_ns")),
+            timestamp_ns=optional_int(data.get("timestamp_ns") or data.get("timestamp")),
             payload=payload,
         )
 
@@ -212,7 +213,51 @@ def optional_str(value: Any) -> Optional[str]:
     return str(value)
 
 
+def event_sequence(data: dict[str, Any], raw_event_id: Any) -> int:
+    value = data.get("sequence")
+    if value is None and isinstance(raw_event_id, int):
+        value = raw_event_id
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def event_type_name(data: dict[str, Any]) -> str:
+    explicit = data.get("event_type")
+    if explicit not in (None, ""):
+        return str(explicit)
+    legacy_type = data.get("type")
+    if legacy_type == 0:
+        operation = data.get("operation")
+        order_status = data.get("order_status")
+        if operation == 2 or order_status == 0:
+            return "ORDER_CANCELED"
+        if operation == 3:
+            return "ORDER_ACCEPTED"
+        if operation == 4:
+            return "ORDER_REPLACED"
+        if operation in {5, 6, 9}:
+            return "ORDER_MODIFIED"
+        if operation == 7:
+            return "ORDER_REDUCED"
+        if operation == 8:
+            return "ORDER_EXECUTED"
+        return "ORDER_UPDATED"
+    if legacy_type == 7:
+        return "BALANCE_UPDATED"
+    if legacy_type == 8:
+        return "TRADE"
+    if legacy_type == 5:
+        return "BOOK_UPDATED"
+    if legacy_type == 6:
+        return "LEVEL_UPDATED"
+    return str(legacy_type) if legacy_type not in (None, "") else ""
+
+
 def require_order_id(value: int | str | None) -> int | str:
     if value is None:
         raise ValueError("order_id is required")
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
     return value

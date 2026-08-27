@@ -26,8 +26,8 @@ PING_PATH_URL = "/health"
 WS_PUBLIC_SUBSCRIBE = "subscribe_public"
 WS_PRIVATE_SUBSCRIBE = "subscribe_private"
 
-MATCHENGINE_ORDER_COMMAND_SCHEMA = "matchengine.order_command.v1"
-MATCHENGINE_EVENT_SCHEMA = "matchengine.event.v1"
+MATCHENGINE_ORDER_COMMAND_SCHEMA = "matchengine.order_command.v2"
+MATCHENGINE_EVENT_SCHEMA = "matchengine.event.v2"
 
 IP_REQUEST_WEIGHT = "IP_REQUEST_WEIGHT"
 UID_REQUEST_WEIGHT = "UID_REQUEST_WEIGHT"

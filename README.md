@@ -98,6 +98,21 @@ By default, Gateway will start in development mode with unencrypted HTTP endpoin
 
 For comprehensive installation instructions and troubleshooting, visit our [Installation](https://hummingbot.org/installation/) documentation.
 
+## 2Finance Runtime API
+
+The 2Finance image starts `bin/twofinance_runtime_api.py` for governed bot
+provisioning/lifecycle and the read-only Hummingbot MCP tools. In addition to the
+runtime endpoints, it exposes public `/healthz`, `/readyz`, and `/metrics` routes.
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` for the Alloy OTLP/HTTP receiver and provide
+`OCTO_ENVIRONMENT`, `OCTO_CLUSTER`, `POD_NAMESPACE`, `OCTO_VERSION`, and
+`OCTO_OTEL_SAMPLE_RATIO`. Telemetry is fail-open and includes W3C HTTP/tool/runtime
+spans plus a content-free one-minute trace/metric heartbeat. Prometheus metrics
+use only bounded route, tool, lifecycle-operation, status, and outcome values.
+Bot/robot/order/engine/wallet IDs, markets, prices, amounts, request bodies,
+queries, raw errors, tokens, and credentials never become metric/span dimensions
+or structured request-log fields.
+
 ## Getting Help
 
 If you encounter issues or have questions, here's how you can get assistance:
