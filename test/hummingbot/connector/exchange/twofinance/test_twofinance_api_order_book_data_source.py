@@ -44,7 +44,8 @@ class TwoFinanceAPIOrderBookDataSourceTests(unittest.IsolatedAsyncioTestCase):
 
         await self.data_source._parse_order_book_snapshot_message(
             {
-                "schema": "matchengine.event.v1",
+                "schema": "matchengine.event.v2",
+                "version": 2,
                 "sequence": 10,
                 "event_id": "engine:10",
                 "event_type": "ORDER_BOOK_SNAPSHOT",
@@ -71,7 +72,8 @@ class TwoFinanceAPIOrderBookDataSourceTests(unittest.IsolatedAsyncioTestCase):
 
         await self.data_source._parse_order_book_diff_message(
             {
-                "schema": "matchengine.event.v1",
+                "schema": "matchengine.event.v2",
+                "version": 2,
                 "sequence": 11,
                 "event_id": "engine:11",
                 "event_type": "ORDER_BOOK_DIFF",
@@ -82,7 +84,8 @@ class TwoFinanceAPIOrderBookDataSourceTests(unittest.IsolatedAsyncioTestCase):
         )
         await self.data_source._parse_trade_message(
             {
-                "schema": "matchengine.event.v1",
+                "schema": "matchengine.event.v2",
+                "version": 2,
                 "sequence": 12,
                 "event_id": "engine:12",
                 "event_type": "TRADE_EXECUTED",

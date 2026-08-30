@@ -1,3 +1,5 @@
+import json
+import os
 import unittest
 from decimal import Decimal
 
@@ -12,6 +14,35 @@ from hummingbot.core.data_type.in_flight_order import OrderState
 
 
 class TwoFinanceMatchEngineSchemasTests(unittest.TestCase):
+    def test_octousdc_v3_interop_fixture(self):
+        fixture_path = os.environ.get("OCTO_V3_INTEROP_FIXTURE")
+        if not fixture_path:
+            self.skipTest("OCTO_V3_INTEROP_FIXTURE is not set")
+
+        with open(fixture_path, encoding="utf-8") as fixture:
+            payload = json.load(fixture)
+        event = MatchEngineEvent.from_payload(payload)
+
+        self.assertEqual(event.schema, "matchengine.event.v3")
+        self.assertEqual(event.version, 3)
+        self.assertEqual(event.engine_id, "matchengine-development-octo-usdc-v3")
+        self.assertEqual(event.sequence, 1)
+        self.assertEqual(event.event_id, f"{event.engine_id}:1")
+        self.assertEqual(event.symbol_id, 8)
+        self.assertEqual(event.market, "OCTO/USDC")
+        self.assertEqual(event.event_type, "TRADE_EXECUTED")
+        self.assertEqual(event.payload["gross_base_amount"], "1.000000")
+        self.assertEqual(event.payload["gross_quote_amount"], "2.000000")
+        self.assertEqual(
+            event.payload["amount_scale"],
+            {
+                "base_decimals": 6,
+                "quote_decimals": 6,
+                "price_decimals": 6,
+                "quote_remainder_decimals": 12,
+            },
+        )
+
     def test_order_command_serializes_canonical_schema(self):
         command = OrderCommand(
             client_order_id="HBOT-2F-1",
@@ -87,7 +118,8 @@ class TwoFinanceMatchEngineSchemasTests(unittest.TestCase):
     def test_event_order_state_uses_engine_status(self):
         event = MatchEngineEvent.from_payload(
             {
-                "schema": "matchengine.event.v1",
+                "schema": "matchengine.event.v2",
+                "version": 2,
                 "sequence": 2,
                 "event_id": "engine:2",
                 "event_type": "ORDER_EXECUTED",
@@ -99,7 +131,7 @@ class TwoFinanceMatchEngineSchemasTests(unittest.TestCase):
 
         self.assertEqual(event_order_state(event), OrderState.FILLED)
 
-    def test_legacy_wallet_order_event_is_normalized_to_v2_lifecycle(self):
+    def test_legacy_wallet_order_event_uses_current_v3_default(self):
         event = MatchEngineEvent.from_payload(
             {
                 "type": 0,
@@ -111,10 +143,16 @@ class TwoFinanceMatchEngineSchemasTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(event.schema, "matchengine.event.v2")
+        self.assertEqual(event.schema, "matchengine.event.v3")
         self.assertEqual(event.event_type, "ORDER_ACCEPTED")
         self.assertEqual(event.sequence, 73)
         self.assertEqual(event.payload["order_id"], 5)
+
+    def test_event_rejects_mismatched_schema_version(self):
+        with self.assertRaises(ValueError):
+            MatchEngineEvent.from_payload(
+                {"schema": "matchengine.event.v3", "version": 2, "sequence": 1, "event_type": "BOOK_UPDATED"}
+            )
 
 
 if __name__ == "__main__":

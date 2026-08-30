@@ -95,10 +95,15 @@ class MatchEngineEvent:
     timestamp_ns: int | None = None
     payload: dict[str, Any] = field(default_factory=dict)
     schema: str = CONSTANTS.MATCHENGINE_EVENT_SCHEMA
+    version: int = 3
     engine_id: str | None = None
 
     @classmethod
     def from_payload(cls, data: dict[str, Any]) -> "MatchEngineEvent":
+        schema = str(data.get("schema", CONSTANTS.MATCHENGINE_EVENT_SCHEMA))
+        version = int(data.get("version", 3))
+        if (schema, version) not in {("matchengine.event.v2", 2), ("matchengine.event.v3", 3)}:
+            raise ValueError(f"unsupported Match Engine event schema/version: {schema}/{version}")
         payload = data.get("payload")
         if not isinstance(payload, dict):
             payload = {
@@ -107,6 +112,7 @@ class MatchEngineEvent:
                 if key
                 not in {
                     "schema",
+                    "version",
                     "engine_id",
                     "sequence",
                     "event_id",
@@ -118,7 +124,8 @@ class MatchEngineEvent:
             }
         raw_event_id = data.get("event_id") or data.get("sequence") or ""
         return cls(
-            schema=str(data.get("schema", CONSTANTS.MATCHENGINE_EVENT_SCHEMA)),
+            schema=schema,
+            version=version,
             engine_id=optional_str(data.get("engine_id")),
             sequence=event_sequence(data, raw_event_id),
             event_id=str(raw_event_id),

@@ -126,7 +126,8 @@ class TwoFinanceMatchEngineClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.api_factory.ws.incoming.append(
             {
-                "schema": "matchengine.event.v1",
+                "schema": "matchengine.event.v2",
+                "version": 2,
                 "sequence": 1,
                 "event_id": "engine:1",
                 "event_type": "ORDER_ACCEPTED",
@@ -188,7 +189,8 @@ class TwoFinanceMatchEngineClientTests(unittest.IsolatedAsyncioTestCase):
         await self.client.send_command(create_command)
         self.api_factory.ws.incoming.append(
             {
-                "schema": "matchengine.event.v1",
+                "schema": "matchengine.event.v2",
+                "version": 2,
                 "sequence": 1,
                 "event_id": "engine:1",
                 "event_type": "ORDER_ACCEPTED",

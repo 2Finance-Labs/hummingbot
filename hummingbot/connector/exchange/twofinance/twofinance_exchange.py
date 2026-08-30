@@ -414,34 +414,58 @@ class TwoFinanceExchange(ExchangePyBase):
         )
 
     def _trade_update_from_event(self, event: MatchEngineEvent) -> Optional[TradeUpdate]:
-        exchange_order_id = (
-            event.payload.get("order_id") or event.payload.get("taker_order_id") or event.payload.get("maker_order_id")
-        )
         client_order_id = event.payload.get("client_order_id")
-        if client_order_id is None and exchange_order_id is not None:
-            client_order_id = self._matchengine_client.orders_by_exchange_id.get(str(exchange_order_id))
+        exchange_order_id = event.payload.get("order_id")
+        order_candidates = [
+            exchange_order_id,
+            event.payload.get("taker_order_id"),
+            event.payload.get("maker_order_id"),
+            event.payload.get("buyer_order_id"),
+            event.payload.get("seller_order_id"),
+        ]
+        if client_order_id is None:
+            for candidate in order_candidates:
+                if candidate is None:
+                    continue
+                mapped_client_order_id = self._matchengine_client.orders_by_exchange_id.get(str(candidate))
+                if mapped_client_order_id is not None:
+                    client_order_id = mapped_client_order_id
+                    exchange_order_id = candidate
+                    break
+        elif exchange_order_id is None:
+            exchange_order_id = next((candidate for candidate in order_candidates if candidate is not None), None)
         if client_order_id is None or exchange_order_id is None:
             return None
         tracked_order = self._order_tracker.all_fillable_orders.get(str(client_order_id))
         trading_pair = web_utils.normalize_trading_pair(
             event.market or (tracked_order.trading_pair if tracked_order is not None else "")
         )
+        base_amount = to_decimal(
+            event.payload.get("gross_base_amount")
+            or event.payload.get("quantity")
+            or event.payload.get("amount")
+            or "0"
+        )
+        price = to_decimal(event.payload.get("price") or "0")
         return TradeUpdate(
             trade_id=str(event.payload.get("trade_id") or event.event_id),
             client_order_id=str(client_order_id),
             exchange_order_id=str(exchange_order_id),
             trading_pair=trading_pair,
             fill_timestamp=self._timestamp(event),
-            fill_price=to_decimal(event.payload.get("price") or "0"),
-            fill_base_amount=to_decimal(event.payload.get("quantity") or event.payload.get("amount") or "0"),
-            fill_quote_amount=to_decimal(event.payload.get("quote_quantity") or "0")
-            or to_decimal(event.payload.get("quantity") or event.payload.get("amount") or "0")
-            * to_decimal(event.payload.get("price") or "0"),
-            fee=self._fee_from_payload(event.payload),
+            fill_price=price,
+            fill_base_amount=base_amount,
+            fill_quote_amount=to_decimal(
+                event.payload.get("gross_quote_amount") or event.payload.get("quote_quantity") or "0"
+            )
+            or base_amount * price,
+            fee=self._fee_from_payload(event.payload, tracked_order),
         )
 
     def _trade_update_from_payload(self, payload: Dict[str, Any], order: InFlightOrder) -> TradeUpdate:
-        quantity = to_decimal(payload.get("quantity") or payload.get("amount") or "0")
+        quantity = to_decimal(
+            payload.get("gross_base_amount") or payload.get("quantity") or payload.get("amount") or "0"
+        )
         price = to_decimal(payload.get("price") or "0")
         return TradeUpdate(
             trade_id=str(payload.get("trade_id") or payload.get("id")),
@@ -451,13 +475,37 @@ class TwoFinanceExchange(ExchangePyBase):
             fill_timestamp=float(payload.get("timestamp") or self.current_timestamp),
             fill_price=price,
             fill_base_amount=quantity,
-            fill_quote_amount=to_decimal(payload.get("quote_quantity") or quantity * price),
-            fee=self._fee_from_payload(payload),
+            fill_quote_amount=to_decimal(
+                payload.get("gross_quote_amount") or payload.get("quote_quantity") or quantity * price
+            ),
+            fee=self._fee_from_payload(payload, order),
         )
 
-    def _fee_from_payload(self, payload: Dict[str, Any]) -> TradeFeeBase:
+    def _fee_from_payload(
+        self, payload: Dict[str, Any], order: Optional[InFlightOrder] = None
+    ) -> TradeFeeBase:
         fee_amount = to_decimal(payload.get("fee_amount") or payload.get("fee") or "0")
         fee_asset = payload.get("fee_asset") or payload.get("asset")
+        if payload.get("buyer_fee_asset") or payload.get("seller_fee_asset"):
+            if order is None:
+                return AddedToCostTradeFee(percent=Decimal("0"), flat_fees=[])
+            if order.trade_type is TradeType.BUY:
+                fee_amount = to_decimal(payload.get("buyer_fee_amount") or "0")
+                fee_asset = payload.get("buyer_fee_asset")
+            else:
+                fee_amount = to_decimal(payload.get("seller_fee_amount") or "0")
+                fee_asset = payload.get("seller_fee_asset")
+        elif isinstance(fee_asset, dict):
+            # Historical v2 events carried both fee identities in one object.
+            # Keep read compatibility but never aggregate currencies.
+            if order is None:
+                return AddedToCostTradeFee(percent=Decimal("0"), flat_fees=[])
+            if order.trade_type is TradeType.BUY:
+                fee_amount = to_decimal(payload.get("buyer_fee_amount") or "0")
+                fee_asset = payload.get("base_asset")
+            else:
+                fee_amount = to_decimal(payload.get("seller_fee_amount") or "0")
+                fee_asset = payload.get("quote_asset")
         flat_fees = [TokenAmount(str(fee_asset), fee_amount)] if fee_asset and fee_amount > Decimal("0") else []
         return AddedToCostTradeFee(percent=Decimal("0"), flat_fees=flat_fees)
 

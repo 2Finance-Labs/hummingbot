@@ -99,7 +99,8 @@ class TwoFinanceExchangeTests(unittest.IsolatedAsyncioTestCase):
     def test_order_update_from_event(self):
         event = MatchEngineEvent.from_payload(
             {
-                "schema": "matchengine.event.v1",
+                "schema": "matchengine.event.v2",
+                "version": 2,
                 "sequence": 1,
                 "event_id": "engine:1",
                 "event_type": "ORDER_ACCEPTED",
@@ -130,7 +131,8 @@ class TwoFinanceExchangeTests(unittest.IsolatedAsyncioTestCase):
         self.exchange._matchengine_client.orders_by_exchange_id["99"] = "HBOT-2F-1"
         event = MatchEngineEvent.from_payload(
             {
-                "schema": "matchengine.event.v1",
+                "schema": "matchengine.event.v2",
+                "version": 2,
                 "sequence": 2,
                 "event_id": "engine:2",
                 "event_type": "TRADE_EXECUTED",
@@ -154,6 +156,102 @@ class TwoFinanceExchangeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trade_update.fill_quote_amount, Decimal("50.0"))
         self.assertEqual(trade_update.fee.flat_fees[0].token, "USDT")
         self.assertEqual(trade_update.fee.flat_fees[0].amount, Decimal("0.01"))
+
+    def test_trade_update_from_canonical_v3_uses_gross_amounts_and_side_fee(self):
+        order = InFlightOrder(
+            client_order_id="HBOT-OCTO-1",
+            trading_pair="OCTO-USDC",
+            order_type=OrderType.LIMIT,
+            trade_type=TradeType.BUY,
+            amount=Decimal("2"),
+            price=Decimal("1.25"),
+            exchange_order_id="77",
+            creation_timestamp=1,
+        )
+        self.exchange._order_tracker.start_tracking_order(order)
+        self.exchange._matchengine_client.orders_by_exchange_id["77"] = "HBOT-OCTO-1"
+        event = MatchEngineEvent.from_payload(
+            {
+                "schema": "matchengine.event.v3",
+                "version": 3,
+                "sequence": 3,
+                "event_id": "spot-octo-usdc:3",
+                "event_type": "TRADE_EXECUTED",
+                "symbol_id": 8,
+                "market": "OCTO/USDC",
+                "payload": {
+                    "trade_id": "trade-3",
+                    "buyer_order_id": 77,
+                    "maker_order_id": 77,
+                    "taker_order_id": 88,
+                    "price": "1.250000",
+                    "gross_base_amount": "2.000000",
+                    "gross_quote_amount": "2.500000",
+                    "base_asset": "OCTO",
+                    "quote_asset": "USDC",
+                    "buyer_fee_asset": "OCTO",
+                    "buyer_fee_amount": "0.024000",
+                    "seller_fee_asset": "USDC",
+                    "seller_fee_amount": "0.036000",
+                },
+            }
+        )
+
+        trade_update = self.exchange._trade_update_from_event(event)
+
+        self.assertEqual(trade_update.fill_base_amount, Decimal("2.000000"))
+        self.assertEqual(trade_update.fill_quote_amount, Decimal("2.500000"))
+        self.assertEqual(trade_update.fee.flat_fees[0].token, "OCTO")
+        self.assertEqual(trade_update.fee.flat_fees[0].amount, Decimal("0.024000"))
+
+    def test_trade_update_from_historical_v2_sell_uses_seller_quote_fee(self):
+        order = InFlightOrder(
+            client_order_id="HBOT-OCTO-SELL-1",
+            trading_pair="OCTO-USDC",
+            order_type=OrderType.LIMIT,
+            trade_type=TradeType.SELL,
+            amount=Decimal("2"),
+            price=Decimal("1.25"),
+            exchange_order_id="88",
+            creation_timestamp=1,
+        )
+        self.exchange._order_tracker.start_tracking_order(order)
+        self.exchange._matchengine_client.orders_by_exchange_id["88"] = "HBOT-OCTO-SELL-1"
+        event = MatchEngineEvent.from_payload(
+            {
+                "schema": "matchengine.event.v2",
+                "version": 2,
+                "sequence": 4,
+                "event_id": "spot-octo-usdc:4",
+                "event_type": "TRADE_EXECUTED",
+                "symbol_id": 8,
+                "market": "OCTO/USDC",
+                "payload": {
+                    "trade_id": "trade-4",
+                    "buyer_order_id": 77,
+                    "seller_order_id": 88,
+                    "maker_order_id": 77,
+                    "taker_order_id": 88,
+                    "price": "1.250000",
+                    "gross_base_amount": "2.000000",
+                    "gross_quote_amount": "2.500000",
+                    "base_asset": "OCTO",
+                    "quote_asset": "USDC",
+                    "fee_asset": {"buyer_asset_id": 10, "seller_asset_id": 20},
+                    "fee_amount": "0.060000",
+                    "buyer_fee_amount": "0.024000",
+                    "seller_fee_amount": "0.036000",
+                },
+            }
+        )
+
+        trade_update = self.exchange._trade_update_from_event(event)
+
+        self.assertEqual(trade_update.exchange_order_id, "88")
+        self.assertEqual(trade_update.fill_base_amount, Decimal("2.000000"))
+        self.assertEqual(trade_update.fill_quote_amount, Decimal("2.500000"))
+        self.assertEqual(trade_update.fee.flat_fees[0].token, "USDC")
+        self.assertEqual(trade_update.fee.flat_fees[0].amount, Decimal("0.036000"))
 
 
 if __name__ == "__main__":
