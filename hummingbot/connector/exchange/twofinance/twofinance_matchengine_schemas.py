@@ -37,6 +37,7 @@ class OrderCommand:
     idempotency_key: str | None = None
     operation: CommandOperation = "ADD"
     order_id: int | str | None = None
+    route_epoch: int | None = None
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -50,6 +51,8 @@ class OrderCommand:
             "wallet_id": self.wallet_id,
             "symbol_id": self.symbol_id,
         }
+        if self.route_epoch is not None:
+            payload["route_epoch"] = self.route_epoch
         if self.operation == "ADD":
             payload.update(
                 {

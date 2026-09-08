@@ -1,5 +1,7 @@
 import unittest
 from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from hummingbot.connector.exchange.twofinance.twofinance_exchange import TwoFinanceExchange
 from hummingbot.connector.exchange.twofinance.twofinance_matchengine_schemas import MatchEngineEvent
@@ -38,6 +40,60 @@ class TwoFinanceExchangeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["symbol_id"], 1)
         self.assertEqual(payload["market"], "BTC-USDT")
 
+    async def test_place_order_resolves_exchange_id_from_state_after_queue_ack(self):
+        self.exchange._ack_timeout = 0.2
+        self.exchange._matchengine_client.send_command = AsyncMock()
+        self.exchange._matchengine_client.wait_for_ack = AsyncMock(
+            return_value=SimpleNamespace(accepted=True, order_id=None, reason=None)
+        )
+        self.exchange._matchengine_client.wait_for_exchange_order_id = AsyncMock(return_value=None)
+        self.exchange._api_get = AsyncMock(
+            side_effect=[{"client_order_id": "HBOT-2F-POLL", "status": "OPEN"},
+                         {"client_order_id": "HBOT-2F-POLL", "order_id": 73, "status": "OPEN"}]
+        )
+
+        exchange_order_id, _ = await self.exchange._place_order(
+            "HBOT-2F-POLL", "BTC-USDT", Decimal("1"), TradeType.BUY, OrderType.LIMIT, Decimal("10")
+        )
+
+        self.assertEqual(exchange_order_id, "73")
+        self.assertEqual(self.exchange._matchengine_client.orders_by_exchange_id["73"], "HBOT-2F-POLL")
+
+    async def test_place_order_fails_closed_when_exchange_id_is_never_confirmed(self):
+        self.exchange._matchengine_client.send_command = AsyncMock()
+        self.exchange._matchengine_client.wait_for_ack = AsyncMock(
+            return_value=SimpleNamespace(accepted=True, order_id=None, reason=None)
+        )
+        self.exchange._matchengine_client.wait_for_exchange_order_id = AsyncMock(return_value=None)
+        self.exchange._api_get = AsyncMock(return_value={"status": "OPEN"})
+
+        with self.assertRaisesRegex(IOError, "did not confirm its exchange order id"):
+            await self.exchange._place_order(
+                "HBOT-2F-NO-ID", "BTC-USDT", Decimal("1"), TradeType.BUY, OrderType.LIMIT, Decimal("10")
+            )
+
+    async def test_place_cancel_waits_for_and_propagates_rejection(self):
+        self.exchange._ack_timeout = 0.1
+        self.exchange._matchengine_client.send_command = AsyncMock()
+        self.exchange._matchengine_client.wait_for_ack = AsyncMock(
+            return_value=SimpleNamespace(accepted=False, reason="ORDER_NOT_FOUND")
+        )
+        tracked_order = InFlightOrder(
+            client_order_id="HBOT-2F-CANCEL",
+            trading_pair="BTC-USDT",
+            order_type=OrderType.LIMIT,
+            trade_type=TradeType.BUY,
+            amount=Decimal("1"),
+            price=Decimal("10"),
+            exchange_order_id="404",
+            creation_timestamp=1,
+        )
+
+        self.assertFalse(await self.exchange._place_cancel("HBOT-2F-CANCEL-REQUEST", tracked_order))
+        self.exchange._matchengine_client.wait_for_ack.assert_awaited_once_with(
+            "HBOT-2F-CANCEL-REQUEST", 0.1
+        )
+
     async def test_format_trading_rules(self):
         rules = await self.exchange._format_trading_rules(
             {
@@ -60,6 +116,49 @@ class TwoFinanceExchangeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rules[0].min_price_increment, Decimal("0.01"))
         self.assertEqual(rules[0].min_base_amount_increment, Decimal("0.0001"))
         self.assertEqual(rules[0].min_notional_size, Decimal("10"))
+
+    async def test_consumes_canonical_market_directory(self):
+        directory = {
+            "schema": "2finance.market_directory.v1",
+            "generated_at": "2026-09-06T12:00:00Z",
+            "markets": [
+                {
+                    "schema": "2finance.market_definition.v1",
+                    "market_id": "BTC/USDT",
+                    "symbol": "BTC/USDT",
+                    "engine_id": "engine-btc-directory",
+                    "symbol_id": 9,
+                    "route_epoch": 4,
+                    "status": "active",
+                    "tick_size": "0.01",
+                    "step_size": "0.0001",
+                    "limits": {"amount": {"min": "0.001"}, "notional": {"min": "10"}},
+                    "endpoints": {"websocket": "wss://ws.test/engines/engine-btc-directory"},
+                }
+            ],
+        }
+
+        rules = await self.exchange._format_trading_rules(directory)
+        self.exchange._initialize_trading_pair_symbols_from_exchange_info(directory)
+        command = await self.exchange._build_order_command(
+            order_id="HBOT-2F-DIRECTORY",
+            trading_pair="BTC-USDT",
+            amount=Decimal("0.01"),
+            trade_type=TradeType.BUY,
+            order_type=OrderType.LIMIT,
+            price=Decimal("50000"),
+            time_in_force="GTC",
+        )
+
+        self.assertEqual(rules[0].min_price_increment, Decimal("0.01"))
+        self.assertEqual(command.engine_id, "engine-btc-directory")
+        self.assertEqual(command.symbol_id, 9)
+        self.assertEqual(command.route_epoch, 4)
+        self.assertEqual(self.exchange._engine_id, "engine-btc-directory")
+        self.assertEqual(
+            self.exchange._matchengine_client.ws_url,
+            "wss://ws.test/engines/engine-btc-directory",
+        )
 
     async def test_format_trading_rules_normalizes_exchange_pair(self):
         rules = await self.exchange._format_trading_rules(

@@ -16,6 +16,10 @@ from hummingbot.connector.exchange.twofinance.twofinance_api_user_stream_data_so
     TwoFinanceAPIUserStreamDataSource,
 )
 from hummingbot.connector.exchange.twofinance.twofinance_auth import TwoFinanceAuth
+from hummingbot.connector.exchange.twofinance.twofinance_market_directory import (
+    MARKET_DIRECTORY_SCHEMA,
+    parse_market_directory,
+)
 from hummingbot.connector.exchange.twofinance.twofinance_matchengine_client import MatchEngineClient
 from hummingbot.connector.exchange.twofinance.twofinance_matchengine_schemas import (
     MatchEngineEvent,
@@ -199,20 +203,57 @@ class TwoFinanceExchange(ExchangePyBase):
         )
         await self._matchengine_client.send_command(command)
         response = await self._matchengine_client.wait_for_ack(order_id, self._ack_timeout)
-        if response is not None and not response.accepted:
+        if response is None:
+            raise IOError(f"2Finance did not acknowledge order {order_id}")
+        if not response.accepted:
             raise IOError(response.reason or f"2Finance rejected order {order_id}")
-        exchange_order_id = response.order_id if response is not None and response.order_id is not None else None
+        exchange_order_id = response.order_id
         if exchange_order_id is None:
             exchange_order_id = await self._matchengine_client.wait_for_exchange_order_id(order_id, self._ack_timeout)
-        return exchange_order_id or f"UNKNOWN:{order_id}", self.current_timestamp
+        if exchange_order_id is None:
+            exchange_order_id = await self._resolve_exchange_order_id(order_id, self._ack_timeout)
+        if exchange_order_id is None:
+            raise IOError(f"2Finance accepted order {order_id} but did not confirm its exchange order id")
+        return exchange_order_id, self.current_timestamp
+
+    async def _resolve_exchange_order_id(self, client_order_id: str, timeout_seconds: float) -> Optional[str]:
+        deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0)
+        while True:
+            try:
+                payload = await self._api_get(
+                    path_url=CONSTANTS.ORDER_STATUS_PATH_URL.format(client_order_id=client_order_id),
+                    is_auth_required=True,
+                    limit_id=CONSTANTS.ORDER_STATUS_PATH_URL,
+                )
+                data = payload.get("data", payload) if isinstance(payload, dict) else {}
+                exchange_order_id = data.get("order_id") if isinstance(data, dict) else None
+                if exchange_order_id not in (None, "", 0, "0"):
+                    resolved = str(exchange_order_id)
+                    entry = self._matchengine_client.orders.get(client_order_id)
+                    if entry is not None:
+                        entry.exchange_order_id = resolved
+                    self._matchengine_client.orders_by_exchange_id[resolved] = client_order_id
+                    return resolved
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.logger().debug(
+                    "2Finance order id is not visible in the state API yet.",
+                    exc_info=True,
+                )
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return None
+            await asyncio.sleep(min(0.1, remaining))
 
     async def _place_cancel(self, order_id: str, tracked_order: InFlightOrder):
         exchange_order_id = await tracked_order.get_exchange_order_id()
         metadata = await self._metadata_for_pair(tracked_order.trading_pair)
         command = OrderCommand(
             client_order_id=order_id,
-            engine_id=self._engine_id,
+            engine_id=str(metadata.get("engine_id") or self._engine_id),
             symbol_id=int(metadata["symbol_id"]),
+            route_epoch=int(metadata.get("route_epoch") or 1),
             market=tracked_order.trading_pair,
             wallet_id=self._wallet_id,
             side="BUY",
@@ -223,7 +264,8 @@ class TwoFinanceExchange(ExchangePyBase):
             idempotency_key=f"{order_id}:cancel",
         )
         await self._matchengine_client.send_command(command)
-        return True
+        response = await self._matchengine_client.wait_for_ack(order_id, self._ack_timeout)
+        return response is not None and response.accepted
 
     async def _user_stream_event_listener(self):
         async for event_message in self._iter_user_event_queue():
@@ -244,6 +286,17 @@ class TwoFinanceExchange(ExchangePyBase):
                 self.logger().exception("Unexpected error processing 2Finance user stream event.")
 
     async def _format_trading_rules(self, exchange_info_dict: Dict[str, Any]) -> List[TradingRule]:
+        if isinstance(exchange_info_dict, dict) and exchange_info_dict.get("schema") == MARKET_DIRECTORY_SCHEMA:
+            return [
+                TradingRule(
+                    trading_pair=web_utils.normalize_trading_pair(market.symbol),
+                    min_order_size=market.min_amount,
+                    min_price_increment=market.tick_size,
+                    min_base_amount_increment=market.step_size,
+                    min_notional_size=market.min_notional,
+                )
+                for market in parse_market_directory(exchange_info_dict)
+            ]
         data = (
             exchange_info_dict.get("data", exchange_info_dict)
             if isinstance(exchange_info_dict, dict)
@@ -298,6 +351,7 @@ class TwoFinanceExchange(ExchangePyBase):
         payload = await self._api_get(
             path_url=CONSTANTS.ORDER_TRADES_PATH_URL.format(client_order_id=order.client_order_id),
             is_auth_required=True,
+            limit_id=CONSTANTS.ORDER_TRADES_PATH_URL,
         )
         data = payload.get("data", payload) if isinstance(payload, dict) else payload
         if isinstance(data, dict) and "trades" in data:
@@ -311,6 +365,7 @@ class TwoFinanceExchange(ExchangePyBase):
         payload = await self._api_get(
             path_url=CONSTANTS.ORDER_STATUS_PATH_URL.format(client_order_id=tracked_order.client_order_id),
             is_auth_required=True,
+            limit_id=CONSTANTS.ORDER_STATUS_PATH_URL,
         )
         data = payload.get("data", payload) if isinstance(payload, dict) else payload
         state = CONSTANTS.ORDER_STATE.get(str(data.get("status") or "OPEN").upper(), OrderState.OPEN)
@@ -327,6 +382,36 @@ class TwoFinanceExchange(ExchangePyBase):
         return None
 
     def _initialize_trading_pair_symbols_from_exchange_info(self, exchange_info: Dict[str, Any]):
+        if isinstance(exchange_info, dict) and exchange_info.get("schema") == MARKET_DIRECTORY_SCHEMA:
+            mapping = bidict()
+            self._symbol_metadata.clear()
+            definitions = parse_market_directory(exchange_info)
+            selected = [
+                definition
+                for definition in definitions
+                if not self._trading_pairs
+                or web_utils.normalize_trading_pair(definition.symbol) in self._trading_pairs
+            ]
+            selected_engines = {definition.engine_id for definition in selected}
+            if len(selected_engines) > 1:
+                raise ValueError("a 2Finance Hummingbot connector session cannot span multiple MatchEngines")
+            if selected:
+                route = selected[0]
+                self._engine_id = route.engine_id
+                self._matchengine_ws_url = route.websocket_endpoint
+                matchengine_client = getattr(self, "_matchengine_client", None)
+                if matchengine_client is not None:
+                    matchengine_client.ws_url = route.websocket_endpoint
+            for definition in definitions:
+                trading_pair = web_utils.normalize_trading_pair(definition.symbol)
+                mapping[definition.symbol] = trading_pair
+                self._symbol_metadata[trading_pair] = {
+                    **definition.raw,
+                    "exchange_symbol": definition.symbol,
+                    "websocket_endpoint": definition.websocket_endpoint,
+                }
+            self._set_trading_pair_symbol_map(mapping)
+            return
         data = exchange_info.get("data", exchange_info) if isinstance(exchange_info, dict) else exchange_info
         if isinstance(data, dict) and "symbols" in data:
             data = data["symbols"]
@@ -382,8 +467,9 @@ class TwoFinanceExchange(ExchangePyBase):
         metadata = await self._metadata_for_pair(trading_pair)
         return OrderCommand(
             client_order_id=order_id,
-            engine_id=self._engine_id,
+            engine_id=str(metadata.get("engine_id") or self._engine_id),
             symbol_id=int(metadata["symbol_id"]),
+            route_epoch=int(metadata.get("route_epoch") or 1),
             market=trading_pair,
             wallet_id=self._wallet_id,
             side="BUY" if trade_type is TradeType.BUY else "SELL",

@@ -9,19 +9,19 @@ TESTNET_DOMAIN = "twofinance_testnet"
 HBOT_ORDER_ID_PREFIX = "HBOT-2F-"
 MAX_ORDER_ID_LEN = 64
 
-REST_URL = "http://127.0.0.1:8080/api/v1"
+REST_URL = "http://127.0.0.1:8080"
 WSS_URL = "ws://127.0.0.1:10000"
 TESTNET_REST_URL = REST_URL
 TESTNET_WSS_URL = WSS_URL
 
-SYMBOLS_PATH_URL = "/symbols"
-TRADING_RULES_PATH_URL = "/trading-rules"
-BALANCES_PATH_URL = "/balances"
-ORDER_BOOK_PATH_URL = "/order-book/{trading_pair}"
-ORDER_STATUS_PATH_URL = "/orders/{client_order_id}"
-ORDER_TRADES_PATH_URL = "/orders/{client_order_id}/trades"
-EVENTS_PATH_URL = "/events"
-PING_PATH_URL = "/health"
+SYMBOLS_PATH_URL = "/api/v2/exchange/markets"
+TRADING_RULES_PATH_URL = SYMBOLS_PATH_URL
+BALANCES_PATH_URL = "/api/v2/exchange/account/balance"
+ORDER_BOOK_PATH_URL = "/api/v2/exchange/markets/{trading_pair}/orderbook"
+ORDER_STATUS_PATH_URL = "/api/v2/exchange/orders/{client_order_id}"
+ORDER_TRADES_PATH_URL = "/api/v2/exchange/my/trades?client_order_id={client_order_id}"
+EVENTS_PATH_URL = "/api/v2/exchange/audit/events"
+PING_PATH_URL = "/api/v2/exchange/status"
 
 WS_PUBLIC_SUBSCRIBE = "subscribe_public"
 WS_PRIVATE_SUBSCRIBE = "subscribe_private"
