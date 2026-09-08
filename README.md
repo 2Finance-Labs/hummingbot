@@ -10,6 +10,23 @@ Hummingbot is an open-source framework that helps you design and deploy automate
 
 The Hummingbot codebase is free and publicly available under the Apache 2.0 open-source license. Our mission is to **democratize high-frequency trading** by creating a global community of algorithmic traders and developers that share knowledge and contribute to the codebase.
 
+## Integração 2Finance
+
+Este checkout inclui o Runtime API e as integrações usadas pela plataforma
+2Finance, além do Hummingbot upstream.
+
+- **Instalar:** `make install` ou siga o fluxo Conda da seção Getting Started.
+- **Build:** `make build`.
+- **Executar TUI:** `./start` ou `make run`.
+- **Executar com Docker:** `docker compose up --build`.
+- **Validar:** `make test`; testes de conectores live exigem credenciais e rede.
+- **Uso integrado:** o Runtime API é interno em
+  `http://svc-2finance-hummingbot-runtime.2finance-local.svc.cluster.local:8000`.
+
+Fork 2Finance: <https://github.com/2Finance-Labs/hummingbot>. Upstream:
+<https://github.com/hummingbot/hummingbot>. Endpoints do workspace:
+[`../README.md`](../README.md).
+
 ## Quick Links
 
 * [Website and Docs](https://hummingbot.org): Official Hummingbot website and documentation
